@@ -14,8 +14,11 @@ class Settings(BaseSettings):
     # Default LLM model nomi (Model Providers'da ko'rgan nom bilan bir xil)
     default_llm_id: str = os.getenv("DEFAULT_LLM_ID", "gemma-4-31B-it@rag-llm@OpenAI-API-Compatible")
 
-    # Har bir tenant uchun mapping ma'lumotlarini saqlaydigan sqlite fayl
-    db_path: str = os.getenv("DB_PATH", "./ragflow_mapping.db")
+    # PostgreSQL ulanish satri (asyncpg drayveri uchun)
+    database_url: str = os.getenv(
+        "DATABASE_URL",
+        "postgresql://ragflow:ragflow@127.0.0.1:5432/ragflow_wrapper",
+    )
 
     class Config:
         env_file = ".env"
