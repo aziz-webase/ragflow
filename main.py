@@ -1,9 +1,10 @@
 """
-RAGFlow ustidan collection-based wrapper — FastAPI backend.
+RAGFlow ustidan agent-based wrapper — FastAPI backend.
 
 Model:
-  tenant -> ko'p collection (har biri RAGFlow dataset)
-  "all"  -> tenantning barcha collectionlari ustidan combined assistant
+  tenant     -> ko'p collection (har biri RAGFlow dataset, hujjat konteyneri)
+  agent      -> tanlangan collectionlar + system prompt (= RAGFlow chat assistant)
+  /ask       -> faqat agent_id + user_id + query
 
 Ishga tushirish:
     uvicorn main:app --host 0.0.0.0 --port 8100 --reload
@@ -22,14 +23,14 @@ from fastapi.responses import JSONResponse
 
 import db
 import ragflow_client as rf
-from db import ALL_SCOPE
 from ragflow_client import RAGFlowError
 from schemas import (
     AskRequest,
     AskResponse,
+    CreateAgentRequest,
     CreateTenantRequest,
     CreateTenantResponse,
-    SetPromptRequest,
+    UpdateAgentRequest,
 )
 
 
@@ -41,15 +42,7 @@ async def lifespan(app: FastAPI):
     await rf.close_client()
 
 
-app = FastAPI(title="RAGFlow Wrapper API", version="2.0.0", lifespan=lifespan)
-
-
-def _reject_reserved(collection: str) -> None:
-    if collection == ALL_SCOPE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"'{ALL_SCOPE}' zahiralangan nom — unga hujjat yuklab bo'lmaydi.",
-        )
+app = FastAPI(title="RAGFlow Wrapper API", version="3.0.0", lifespan=lifespan)
 
 
 async def _require_tenant(tenant_name: str) -> None:
@@ -64,56 +57,35 @@ def _empty_dataset_error() -> HTTPException:
     return HTTPException(
         status_code=409,
         detail=(
-            "Chat hali tayyor emas: tegishli collection(lar)da parse qilingan hujjat yo'q. "
+            "Agent hali tayyor emas: biriktirilgan collection(lar)da parse qilingan hujjat yo'q. "
             "Avval hujjat yuklang va parse tugashini kuting."
         ),
     )
 
 
-async def _ensure_collection_chat(tenant_name: str, col) -> str:
-    """Berilgan collection uchun RAGFlow chat assistant'ni lazy yaratadi."""
-    if col["chat_id"]:
-        return col["chat_id"]
-    try:
-        resp = await rf.create_chat_assistant(
-            name=f"{tenant_name}__{col['collection_name']}__{uuid.uuid4().hex[:6]}",
-            dataset_ids=[col["dataset_id"]],
-            persona=col["system_prompt"],
-        )
-    except RAGFlowError as e:
-        if (e.payload or {}).get("code") == 102:
-            raise _empty_dataset_error()
-        raise HTTPException(status_code=502, detail=str(e))
-    chat_id = resp["data"]["id"]
-    await db.set_collection_chat(tenant_name, col["collection_name"], chat_id)
-    return chat_id
+async def _ensure_agent_chat(agent) -> str:
+    """Agent uchun RAGFlow chat assistant'ni lazy yaratadi."""
+    if agent["chat_id"]:
+        return agent["chat_id"]
 
-
-async def _ensure_combined_chat(tenant_name: str) -> str:
-    """Tenantning barcha collectionlari ustidan combined assistant'ni lazy yaratadi."""
-    ta = await db.get_tenant_assistant(tenant_name)
-    if ta and ta["chat_id"]:
-        return ta["chat_id"]
-
-    dataset_ids = await db.all_dataset_ids(tenant_name)
+    dataset_ids = await db.agent_dataset_ids(agent["agent_id"])
     if not dataset_ids:
         raise HTTPException(
             status_code=409,
-            detail="Tenantda hech qanday collection yo'q. Avval hujjat yuklang.",
+            detail="Agentga biriktirilgan collectionlarda dataset yo'q.",
         )
-    persona = ta["system_prompt"] if ta else None
     try:
         resp = await rf.create_chat_assistant(
-            name=f"{tenant_name}__all__{uuid.uuid4().hex[:6]}",
+            name=f"{agent['tenant_name']}__{agent['agent_name']}__{uuid.uuid4().hex[:6]}",
             dataset_ids=dataset_ids,
-            persona=persona,
+            persona=agent["system_prompt"],
         )
     except RAGFlowError as e:
         if (e.payload or {}).get("code") == 102:
             raise _empty_dataset_error()
         raise HTTPException(status_code=502, detail=str(e))
     chat_id = resp["data"]["id"]
-    await db.set_tenant_assistant_chat(tenant_name, chat_id)
+    await db.set_agent_chat(agent["agent_id"], chat_id)
     return chat_id
 
 
@@ -129,31 +101,28 @@ async def create_tenant(req: CreateTenantRequest):
 
 
 # ---------------------------------------------------------------------
-# DOCUMENT INGEST (collection bo'yicha)
+# DOCUMENT INGEST (collection = hujjat konteyneri)
 # ---------------------------------------------------------------------
 
 @app.post("/tenants/{tenant_name}/documents")
 async def upload_documents(
     tenant_name: str,
-    collection: str = Form(..., description="Collection nomi (majburiy, 'all' bo'lmasin)"),
+    collection: str = Form(..., description="Collection nomi (majburiy)"),
     files: list[UploadFile] = File(...),
 ):
     """Fayl(lar)ni berilgan collectionga yuklaydi va parse qiladi.
 
     Collection yangi bo'lsa — yangi RAGFlow dataset yaratiladi.
     """
-    _reject_reserved(collection)
     await db.ensure_tenant(tenant_name)
 
     col = await db.get_collection(tenant_name, collection)
-    new_collection = col is None
-    if new_collection:
+    if col is None:
         try:
             ds_resp = await rf.create_dataset(name=f"{tenant_name}__{collection}")
         except RAGFlowError as e:
             raise HTTPException(status_code=502, detail=str(e))
-        dataset_id = ds_resp["data"]["id"]
-        col = await db.create_collection(tenant_name, collection, dataset_id)
+        col = await db.create_collection(tenant_name, collection, ds_resp["data"]["id"])
     dataset_id = col["dataset_id"]
 
     tmp_dir = tempfile.mkdtemp(prefix="ragflow_upload_")
@@ -173,18 +142,6 @@ async def upload_documents(
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    # Yangi collection qo'shildi — agar combined "all" assistant mavjud bo'lsa,
-    # uning dataset_ids'ini yangilab qo'yamiz.
-    if new_collection:
-        ta = await db.get_tenant_assistant(tenant_name)
-        if ta and ta["chat_id"]:
-            try:
-                await rf.update_chat_datasets(
-                    ta["chat_id"], await db.all_dataset_ids(tenant_name)
-                )
-            except RAGFlowError:
-                pass  # keyingi /ask paytida ham tuzatilishi mumkin
-
     return {
         "tenant_name": tenant_name,
         "collection": collection,
@@ -197,11 +154,10 @@ async def upload_documents(
 
 @app.get("/tenants/{tenant_name}/collections")
 async def list_collections(tenant_name: str):
-    """Tenantning barcha collectionlari + 'all' pseudo-yozuvi."""
+    """Tenantning barcha collectionlari (agent yaratishda tanlash uchun)."""
     await _require_tenant(tenant_name)
     cols = await db.list_collections(tenant_name)
 
-    # hujjat sonini RAGFlow datasets ro'yxatidan olamiz
     doc_counts: dict[str, int] = {}
     try:
         ds = await rf.list_datasets()
@@ -210,66 +166,110 @@ async def list_collections(tenant_name: str):
     except RAGFlowError:
         pass
 
-    result = [
+    return [
         {
             "collection": c["collection_name"],
             "dataset_id": c["dataset_id"],
             "document_count": doc_counts.get(c["dataset_id"]),
-            "has_system_prompt": c["system_prompt"] is not None,
-            "chat_ready": c["chat_id"] is not None,
         }
         for c in cols
     ]
 
-    ta = await db.get_tenant_assistant(tenant_name)
-    tenant_total = (
-        sum(doc_counts.get(c["dataset_id"], 0) for c in cols) if doc_counts else None
-    )
-    result.append(
-        {
-            "collection": ALL_SCOPE,
-            "dataset_id": None,
-            "document_count": tenant_total,
-            "has_system_prompt": bool(ta and ta["system_prompt"]),
-            "chat_ready": bool(ta and ta["chat_id"]),
-        }
-    )
-    return result
-
 
 # ---------------------------------------------------------------------
-# COLLECTION SYSTEM PROMPT
+# AGENTS
 # ---------------------------------------------------------------------
 
-@app.post("/tenants/{tenant_name}/collections/prompt")
-async def set_prompt(tenant_name: str, req: SetPromptRequest):
-    """Bir yoki bir nechta collection (jumladan 'all') uchun system prompt o'rnatadi."""
+async def _validate_collections(tenant_name: str, collections: list[str]) -> None:
+    missing = [c for c in collections if not await db.get_collection(tenant_name, c)]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Quyidagi collection(lar) topilmadi: {missing}. Avval ularga hujjat yuklang.",
+        )
+
+
+@app.post("/tenants/{tenant_name}/agents")
+async def create_agent(tenant_name: str, req: CreateAgentRequest):
+    """Tanlangan collectionlar + system prompt asosida agent yaratadi.
+
+    Natijada qaytgan agent_id keyinchalik /ask'da ishlatiladi.
+    """
     await _require_tenant(tenant_name)
-    updated = []
-    for target in req.targets():
-        if target == ALL_SCOPE:
-            await db.set_tenant_assistant_prompt(tenant_name, req.system_prompt)
-            ta = await db.get_tenant_assistant(tenant_name)
-            if ta and ta["chat_id"]:
-                try:
-                    await rf.update_chat_prompt(ta["chat_id"], req.system_prompt)
-                except RAGFlowError as e:
-                    raise HTTPException(status_code=502, detail=str(e))
-        else:
-            col = await db.get_collection(tenant_name, target)
-            if not col:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Collection '{target}' topilmadi. Avval unga hujjat yuklang.",
+    if await db.get_agent_by_name(tenant_name, req.agent_name):
+        raise HTTPException(status_code=409, detail="Bu agent nomi allaqachon mavjud")
+    await _validate_collections(tenant_name, req.collections)
+
+    agent_id = uuid.uuid4().hex
+    await db.create_agent(
+        agent_id, tenant_name, req.agent_name, req.system_prompt, req.collections
+    )
+    return {
+        "agent_id": agent_id,
+        "agent_name": req.agent_name,
+        "collections": req.collections,
+        "system_prompt": req.system_prompt,
+        "ready": False,
+    }
+
+
+@app.get("/tenants/{tenant_name}/agents")
+async def list_agents(tenant_name: str):
+    await _require_tenant(tenant_name)
+    agents = await db.list_agents(tenant_name)
+    out = []
+    for a in agents:
+        out.append(
+            {
+                "agent_id": a["agent_id"],
+                "agent_name": a["agent_name"],
+                "collections": await db.get_agent_collections(a["agent_id"]),
+                "system_prompt": a["system_prompt"],
+                "ready": a["chat_id"] is not None,
+            }
+        )
+    return out
+
+
+@app.put("/tenants/{tenant_name}/agents/{agent_id}")
+async def update_agent(tenant_name: str, agent_id: str, req: UpdateAgentRequest):
+    """Agent nomi / collectionlari / promptini yangilaydi (RAGFlow assistant ham)."""
+    await _require_tenant(tenant_name)
+    agent = await db.get_agent(agent_id)
+    if not agent or agent["tenant_name"] != tenant_name:
+        raise HTTPException(status_code=404, detail="Agent topilmadi")
+
+    if req.agent_name and req.agent_name != agent["agent_name"]:
+        existing = await db.get_agent_by_name(tenant_name, req.agent_name)
+        if existing:
+            raise HTTPException(status_code=409, detail="Bu agent nomi allaqachon mavjud")
+    if req.collections is not None:
+        await _validate_collections(tenant_name, req.collections)
+
+    await db.update_agent(agent_id, req.agent_name, req.system_prompt, req.collections)
+
+    # RAGFlow assistant allaqachon yaratilgan bo'lsa — uni ham yangilaymiz
+    if agent["chat_id"]:
+        try:
+            if req.collections is not None:
+                await rf.update_chat_datasets(
+                    agent["chat_id"], await db.agent_dataset_ids(agent_id)
                 )
-            await db.set_collection_prompt(tenant_name, target, req.system_prompt)
-            if col["chat_id"]:
-                try:
-                    await rf.update_chat_prompt(col["chat_id"], req.system_prompt)
-                except RAGFlowError as e:
-                    raise HTTPException(status_code=502, detail=str(e))
-        updated.append(target)
-    return {"tenant_name": tenant_name, "updated": updated}
+            if req.system_prompt is not None:
+                await rf.update_chat_prompt(agent["chat_id"], req.system_prompt)
+        except RAGFlowError as e:
+            if (e.payload or {}).get("code") == 102:
+                raise _empty_dataset_error()
+            raise HTTPException(status_code=502, detail=str(e))
+
+    updated = await db.get_agent(agent_id)
+    return {
+        "agent_id": agent_id,
+        "agent_name": updated["agent_name"],
+        "collections": await db.get_agent_collections(agent_id),
+        "system_prompt": updated["system_prompt"],
+        "ready": updated["chat_id"] is not None,
+    }
 
 
 # ---------------------------------------------------------------------
@@ -278,28 +278,20 @@ async def set_prompt(tenant_name: str, req: SetPromptRequest):
 
 @app.post("/ask", response_model=AskResponse)
 async def ask(req: AskRequest):
-    await _require_tenant(req.tenant_name)
-    scope = req.collection
+    agent = await db.get_agent(req.agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{req.agent_id}' topilmadi")
 
-    if scope == ALL_SCOPE:
-        chat_id = await _ensure_combined_chat(req.tenant_name)
-    else:
-        col = await db.get_collection(req.tenant_name, scope)
-        if not col:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Collection '{scope}' topilmadi. Avval unga hujjat yuklang.",
-            )
-        chat_id = await _ensure_collection_chat(req.tenant_name, col)
+    chat_id = await _ensure_agent_chat(agent)
 
-    session_id = await db.get_session(req.tenant_name, req.user_id, scope)
+    session_id = await db.get_session(req.agent_id, req.user_id)
     try:
         if not session_id:
-            sess = await rf.create_session(chat_id, session_name=f"{req.user_id}:{scope}")
+            sess = await rf.create_session(chat_id, session_name=f"{req.user_id}")
             session_id = sess["data"]["id"]
-            await db.save_session(req.tenant_name, req.user_id, scope, session_id, chat_id)
+            await db.save_session(req.agent_id, req.user_id, session_id, chat_id)
 
-        answer_resp = await rf.ask(chat_id, session_id, req.question, stream=False)
+        answer_resp = await rf.ask(chat_id, session_id, req.query, stream=False)
     except RAGFlowError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -307,49 +299,43 @@ async def ask(req: AskRequest):
     answer_text = data.get("answer", "") if isinstance(data, dict) else ""
     reference = data.get("reference") if isinstance(data, dict) else None
 
-    # tarixni Postgresga nusxalaymiz
-    await db.add_message(req.tenant_name, req.user_id, scope, "user", req.question)
-    await db.add_message(
-        req.tenant_name, req.user_id, scope, "assistant", answer_text, reference
-    )
+    await db.add_message(req.agent_id, req.user_id, "user", req.query)
+    await db.add_message(req.agent_id, req.user_id, "assistant", answer_text, reference)
 
     return AskResponse(
-        session_id=session_id, scope=scope, answer=answer_text, raw=answer_resp
+        agent_id=req.agent_id, session_id=session_id, answer=answer_text, raw=answer_resp
     )
 
 
-@app.post("/tenants/{tenant_name}/users/{user_id}/reset-session")
-async def reset_session(tenant_name: str, user_id: str, collection: str = ALL_SCOPE):
-    """Foydalanuvchi uchun berilgan scope'da yangi (bo'sh) sessiya boshlaydi."""
-    await _require_tenant(tenant_name)
-    scope = collection
-    if scope == ALL_SCOPE:
-        chat_id = await _ensure_combined_chat(tenant_name)
-    else:
-        col = await db.get_collection(tenant_name, scope)
-        if not col:
-            raise HTTPException(status_code=404, detail=f"Collection '{scope}' topilmadi.")
-        chat_id = await _ensure_collection_chat(tenant_name, col)
+@app.post("/agents/{agent_id}/users/{user_id}/reset-session")
+async def reset_session(agent_id: str, user_id: str):
+    """Foydalanuvchi uchun agent bilan yangi (bo'sh) sessiya boshlaydi."""
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent topilmadi")
+    chat_id = await _ensure_agent_chat(agent)
     try:
         sess = await rf.create_session(
-            chat_id, session_name=f"{user_id}:{scope}:{uuid.uuid4().hex[:6]}"
+            chat_id, session_name=f"{user_id}:{uuid.uuid4().hex[:6]}"
         )
     except RAGFlowError as e:
         raise HTTPException(status_code=502, detail=str(e))
     session_id = sess["data"]["id"]
-    await db.save_session(tenant_name, user_id, scope, session_id, chat_id)
-    return {"session_id": session_id, "scope": scope}
+    await db.save_session(agent_id, user_id, session_id, chat_id)
+    return {"agent_id": agent_id, "session_id": session_id}
 
 
 # ---------------------------------------------------------------------
 # HISTORY
 # ---------------------------------------------------------------------
 
-@app.get("/tenants/{tenant_name}/users/{user_id}/history")
-async def get_history(tenant_name: str, user_id: str, collection: str | None = None):
-    """Foydalanuvchi tarixini Postgres'dan qaytaradi (ixtiyoriy collection filtri)."""
-    await _require_tenant(tenant_name)
-    rows = await db.get_history(tenant_name, user_id, collection)
+@app.get("/agents/{agent_id}/users/{user_id}/history")
+async def get_history(agent_id: str, user_id: str):
+    """Agent bilan foydalanuvchi tarixini Postgres'dan qaytaradi."""
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent topilmadi")
+    rows = await db.get_history(agent_id, user_id)
     out = []
     for r in rows:
         ref = r["reference"]
@@ -360,7 +346,6 @@ async def get_history(tenant_name: str, user_id: str, collection: str | None = N
                 pass
         out.append(
             {
-                "scope": r["scope"],
                 "role": r["role"],
                 "content": r["content"],
                 "reference": ref,

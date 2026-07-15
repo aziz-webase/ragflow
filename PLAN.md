@@ -1,57 +1,58 @@
-# RAGFlow Wrapper — Collection-based arxitektura rejasi
+# RAGFlow Wrapper — Agent-based arxitektura
 
 ## Asosiy model
-**`collection` = RAGFlow `dataset`.** Har bir collection alohida dataset (KB).
-
 ```
 tenant (tashkilot)
- ├─ collection A  = dataset A + system_prompt A + chat assistant A
- ├─ collection B  = dataset B + system_prompt B + chat assistant B
- └─ "all"         = datasets [A,B] + "all" system_prompt + combined assistant
+ ├─ collection A = dataset A   (hujjat konteyneri)
+ ├─ collection B = dataset B
+ └─ collection C = dataset C
+
+ agent "sales"  = [A, B]      + system_prompt_1   (= RAGFlow chat assistant)
+ agent "support"= [A, C]      + system_prompt_2
 ```
 
-- `collection` maydoni **hamma joyda majburiy**.
-- `"all"` — zahiralangan (reserved) nom: barcha collectionlar ustidan RAG (combined assistant).
-- Har collection, jumladan `"all"`, o'z system_promptiga ega.
-- Combined assistant yangi collection qo'shilganda avtomatik `dataset_ids`ini yangilaydi.
+- **collection** = RAGFlow dataset (faqat hujjat konteyneri).
+- **agent** = tanlangan collectionlar + system prompt = RAGFlow chat assistant + metadata.
+- `/ask` faqat `agent_id` + `user_id` + `query` oladi. Agent o'z collection'lari va promptini biladi.
 
 ## Qarorlar (tasdiqlangan)
-- History → Postgres `messages` jadvaliga nusxalanadi; history API shundan o'qiydi.
-- `/ask`da `collection` majburiy — berilmasa 400.
-- `"all"` = reserved collection; unga hujjat yuklab bo'lmaydi.
-- GET `/collections` = ko'rsatish/boshqarish uchun (ask uchun majburiy emas).
-- DB = Postgres (asyncpg + pool).
+- `/ask` = `agent_id` + `user_id` + `query` (per-user history saqlanadi).
+- `agent_id` = server UUID; `agent_name` tenant ichida unikal.
+- PUT bilan agent tahrirlanadi (collections/prompt/name); RAGFlow assistant ham yangilanadi.
+- History → Postgres `messages` (agent_id, user_id bo'yicha).
+- DB = PostgreSQL (asyncpg + pool).
 
 ## API surface
-1. `POST /tenants/{tenant_name}/documents` — `collection` (majburiy, ≠ "all"), `files`. Dataset lazy-yaratadi, parse.
-2. `POST /tenants/{tenant_name}/collections/prompt` — `collection` yoki `collections:[...]` (jumladan "all"), `system_prompt`.
-3. `GET /tenants/{tenant_name}/collections` — ro'yxat (nom, hujjat soni, prompt bor/yo'q, holat).
-4. `POST /ask` — `tenant_name`, `collection` (majburiy), `user_id`, `question`. Javob `messages`ga yoziladi.
-5. `GET /tenants/{tenant_name}/users/{user_id}/history` (`?collection=` ixtiyoriy).
+| Method | Path | Body / natija |
+|--------|------|---------------|
+| POST | `/tenants` | `{tenant_name}` |
+| POST | `/tenants/{t}/documents` | `collection` + `files` → dataset + parse |
+| GET  | `/tenants/{t}/collections` | collectionlar ro'yxati (tanlash uchun) |
+| POST | `/tenants/{t}/agents` | `{agent_name, collections:[...], system_prompt}` → `{agent_id}` |
+| GET  | `/tenants/{t}/agents` | agentlar ro'yxati |
+| PUT  | `/tenants/{t}/agents/{agent_id}` | `{agent_name?, collections?, system_prompt?}` |
+| POST | `/ask` | `{agent_id, user_id, query}` |
+| POST | `/agents/{agent_id}/users/{user_id}/reset-session` | yangi sessiya |
+| GET  | `/agents/{agent_id}/users/{user_id}/history` | user tarixi |
 
 ## Postgres sxema
 ```
 tenants(tenant_name PK, created_at)
-collections(id PK, tenant_name FK, collection_name, dataset_id,
-            chat_id NULL, system_prompt NULL, created_at,
+collections(id PK, tenant_name FK, collection_name, dataset_id, created_at,
             UNIQUE(tenant_name, collection_name))
-tenant_assistants(tenant_name PK, chat_id NULL, system_prompt NULL)   -- "all"
-sessions(tenant_name, user_id, scope, session_id, chat_id,
-         PK(tenant_name, user_id, scope))       -- scope = collection_name | 'all'
-messages(id PK, tenant_name, user_id, scope, role, content, reference JSONB, created_at)
+agents(agent_id PK, tenant_name FK, agent_name, system_prompt, chat_id NULL,
+       created_at, UNIQUE(tenant_name, agent_name))
+agent_collections(agent_id FK, collection_name, PK(agent_id, collection_name))
+sessions(agent_id FK, user_id, session_id, chat_id, PK(agent_id, user_id))
+messages(id PK, agent_id, user_id, role, content, reference JSONB, created_at)
 ```
 
-## Texnik nuqtalar
-- System prompt + majburiy `{knowledge}` bloki avtomatik birlashtiriladi.
-- RAGFlow bo'sh datasetga assistant ulamaydi (code 102) → assistant lazy (parse bo'lgach).
-- Dataset nomi global to'qnashuvni oldini olish uchun `{tenant}__{collection}`.
-- `_request`ga retry + umumiy httpx client (connection pool).
+## RAGFlow mapping
+- agent → chat assistant; agent collectionlari → `dataset_ids`; agent prompt → assistant prompt.
+- Assistant **lazy** yaratiladi (birinchi `/ask` paytida; bo'sh dataset → 102 → 409).
+- PUT'da `update_chat_datasets` / `update_chat_prompt` bilan mavjud assistant yangilanadi.
+- System prompt = persona + majburiy `{knowledge}` bloki (ragflow_client.build_system_prompt).
 
-## Fazalar
-1. **Infra:** SQLite → Postgres (asyncpg pool), config `DATABASE_URL`, sxema init, requirements.
-2. **Collection ingest:** documents endpointiga `collection`, dataset lazy-yaratish, "all" rad etish.
-3. **Prompt endpoint:** collections/prompt (single/list/"all"), prompt merge, assistant PUT update.
-4. **Ask (collection-aware):** scope routing, lazy assistant (single/combined), session (tenant,user,scope).
-5. **History:** messages'ga yozish + GET history.
-6. **Collections list** endpoint.
-7. **Robustness + cleanup:** _request retry, umumiy httpx client, eski test datasetlarni tozalash.
+## Texnik nuqtalar
+- Dataset nomi global to'qnashuvni oldini olish uchun `{tenant}__{collection}`.
+- `ragflow_client._request` — umumiy httpx client + tarmoq retry (ngrok uzilishlari uchun).

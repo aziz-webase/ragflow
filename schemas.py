@@ -11,43 +11,50 @@ class CreateTenantResponse(BaseModel):
     tenant_name: str
 
 
-class SetPromptRequest(BaseModel):
-    collection: Optional[str] = Field(
-        None, description="Bitta collection nomi (yoki 'all')"
+class CreateAgentRequest(BaseModel):
+    agent_name: str = Field(..., description="Agent nomi (tenant ichida unikal)")
+    collections: list[str] = Field(
+        ..., min_length=1, description="Agent foydalanadigan collection nomlari"
     )
-    collections: Optional[list[str]] = Field(
-        None, description="Bir nechta collection nomi (yoki ['all', ...])"
+    system_prompt: Optional[str] = Field(
+        None, description="Agent uchun system prompt (persona)"
     )
-    system_prompt: str = Field(..., description="Shu collection(lar) uchun system prompt")
+
+
+class UpdateAgentRequest(BaseModel):
+    agent_name: Optional[str] = None
+    collections: Optional[list[str]] = Field(None, min_length=1)
+    system_prompt: Optional[str] = None
 
     @model_validator(mode="after")
-    def _one_target(self):
-        if not self.collection and not self.collections:
-            raise ValueError("collection yoki collections dan biri berilishi shart")
-        if self.collection and self.collections:
-            raise ValueError("collection va collections birga berilmasin")
+    def _at_least_one(self):
+        if self.agent_name is None and self.collections is None and self.system_prompt is None:
+            raise ValueError("kamida bitta maydon (agent_name/collections/system_prompt) berilishi kerak")
         return self
 
-    def targets(self) -> list[str]:
-        return self.collections if self.collections else [self.collection]  # type: ignore
+
+class AgentResponse(BaseModel):
+    agent_id: str
+    agent_name: str
+    collections: list[str]
+    system_prompt: Optional[str] = None
+    ready: bool = False
 
 
 class AskRequest(BaseModel):
-    tenant_name: str = Field(..., description="Qaysi tenant ostida savol berilyapti")
-    collection: str = Field(..., description="Collection nomi yoki 'all' (majburiy)")
+    agent_id: str = Field(..., description="Qaysi agent bilan suhbat")
     user_id: str = Field(..., description="Foydalanuvchi identifikatori — session shu bo'yicha")
-    question: str
+    query: str = Field(..., description="Foydalanuvchi savoli")
 
 
 class AskResponse(BaseModel):
+    agent_id: str
     session_id: str
-    scope: str
     answer: str
     raw: dict
 
 
 class HistoryMessage(BaseModel):
-    scope: str
     role: str
     content: str
     reference: Optional[Any] = None

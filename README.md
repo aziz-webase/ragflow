@@ -1,10 +1,10 @@
 # RAGFlow Wrapper API
 
-RAGFlow ustidan collection-based yupqa wrapper (FastAPI).
+RAGFlow ustidan agent-based yupqa wrapper (FastAPI).
 
-- **tenant** → ko'p **collection** (har biri alohida RAGFlow dataset)
-- **`all`** → tenantning barcha collectionlari ustidan combined RAG
-- Har collection (va `all`) o'z **system prompt**iga ega
+- **tenant** → ko'p **collection** (har biri RAGFlow dataset, hujjat konteyneri)
+- **agent** = tanlangan collectionlar + system prompt (= RAGFlow chat assistant)
+- **`/ask`** faqat `agent_id` + `user_id` + `query` oladi
 - User tarixi PostgreSQL'da saqlanadi
 
 To'liq arxitektura: [PLAN.md](PLAN.md)
@@ -42,10 +42,12 @@ Swagger UI: http://localhost:8100/docs
 
 | Method | Path | Tavsif |
 |--------|------|--------|
-| POST | `/tenants/{tenant}/documents` | `collection` + `files` — hujjat yuklash + parse |
-| POST | `/tenants/{tenant}/collections/prompt` | `collection`/`collections` + `system_prompt` |
-| GET  | `/tenants/{tenant}/collections` | collectionlar ro'yxati (+ `all`) |
-| POST | `/ask` | `tenant_name`, `collection`, `user_id`, `question` |
-| GET  | `/tenants/{tenant}/users/{user_id}/history` | user tarixi (`?collection=` ixtiyoriy) |
+| POST | `/tenants/{t}/documents` | `collection` + `files` — hujjat yuklash + parse |
+| GET  | `/tenants/{t}/collections` | collectionlar ro'yxati (tanlash uchun) |
+| POST | `/tenants/{t}/agents` | `agent_name` + `collections[]` + `system_prompt` → `agent_id` |
+| GET  | `/tenants/{t}/agents` | agentlar ro'yxati |
+| PUT  | `/tenants/{t}/agents/{agent_id}` | agentni tahrirlash |
+| POST | `/ask` | `agent_id`, `user_id`, `query` |
+| GET  | `/agents/{agent_id}/users/{user_id}/history` | user tarixi |
 
-**Tartib:** hujjat yuklash → parse tugashini kutish → (ixtiyoriy) prompt o'rnatish → `/ask`.
+**Tartib:** hujjat yuklash (collection) → parse kutish → agent yaratish (collections tanlab) → `/ask` (agent_id bilan).
