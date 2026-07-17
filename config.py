@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     rag_similarity_threshold: float = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.1"))
     rag_keywords_weight: float = float(os.getenv("RAG_KEYWORDS_WEIGHT", "0.2"))
 
+    # Rerank model (RAGFlow'da sozlangan). Bo'sh bo'lsa rerank ishlatilmaydi.
+    # Masalan: "BAAI/bge-reranker-v2-m3@HuggingFace"
+    rag_rerank_id: str = os.getenv("RAG_RERANK_ID", "")
+
     class Config:
         env_file = ".env"
 

@@ -119,13 +119,17 @@ def _prompt_config(persona: Optional[str]) -> dict:
     MUHIM: RAGFlow custom system prompt va retrieval sozlamalarini
     `prompt_config` kaliti ostida kutadi (`prompt` emas — u jimgina IGNORE qilinadi).
     """
-    return {
+    cfg: dict[str, Any] = {
         "system": build_system_prompt(persona),
         "parameters": [{"key": "knowledge", "optional": False}],
         "top_n": settings.rag_top_n,
         "similarity_threshold": settings.rag_similarity_threshold,
         "keywords_similarity_weight": settings.rag_keywords_weight,
     }
+    # Rerank model sozlangan bo'lsagina qo'shamiz (bo'sh string RAGFlow'da xato beradi)
+    if settings.rag_rerank_id:
+        cfg["rerank_id"] = settings.rag_rerank_id
+    return cfg
 
 
 # ---------------------------------------------------------------------
