@@ -113,10 +113,18 @@ def build_system_prompt(persona: Optional[str]) -> str:
     return f"{persona}\n{_KNOWLEDGE_BLOCK}"
 
 
-def _prompt_obj(persona: Optional[str]) -> dict:
+def _prompt_config(persona: Optional[str]) -> dict:
+    """RAGFlow chat assistant uchun to'liq prompt_config.
+
+    MUHIM: RAGFlow custom system prompt va retrieval sozlamalarini
+    `prompt_config` kaliti ostida kutadi (`prompt` emas — u jimgina IGNORE qilinadi).
+    """
     return {
         "system": build_system_prompt(persona),
         "parameters": [{"key": "knowledge", "optional": False}],
+        "top_n": settings.rag_top_n,
+        "similarity_threshold": settings.rag_similarity_threshold,
+        "keywords_similarity_weight": settings.rag_keywords_weight,
     }
 
 
@@ -203,7 +211,7 @@ async def create_chat_assistant(
         "name": name,
         "dataset_ids": dataset_ids,
         "llm": {"model_name": llm_id or settings.default_llm_id},
-        "prompt": _prompt_obj(persona),
+        "prompt_config": _prompt_config(persona),
     }
     return await _request("POST", "/api/v1/chats", json=payload)
 
@@ -213,7 +221,7 @@ async def update_chat_assistant(chat_id: str, **fields) -> dict:
 
 
 async def update_chat_prompt(chat_id: str, persona: Optional[str]) -> dict:
-    return await update_chat_assistant(chat_id, prompt=_prompt_obj(persona))
+    return await update_chat_assistant(chat_id, prompt_config=_prompt_config(persona))
 
 
 async def update_chat_datasets(chat_id: str, dataset_ids: list[str]) -> dict:

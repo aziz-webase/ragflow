@@ -20,6 +20,13 @@ class Settings(BaseSettings):
         "postgresql://ragflow:ragflow@127.0.0.1:5432/ragflow_wrapper",
     )
 
+    # RAG retrieval sozlamalari (RAGFlow chat assistant prompt_config)
+    # top_n past bo'lsa kerakli chunk kesilib qoladi; keyword og'irligi past bo'lsa
+    # cross-lingual (savol bir tilda, hujjat boshqa tilda) qidiruv yaxshilanadi.
+    rag_top_n: int = int(os.getenv("RAG_TOP_N", "12"))
+    rag_similarity_threshold: float = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.1"))
+    rag_keywords_weight: float = float(os.getenv("RAG_KEYWORDS_WEIGHT", "0.2"))
+
     class Config:
         env_file = ".env"
 
