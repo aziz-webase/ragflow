@@ -1,13 +1,13 @@
 services:
   tei-gpu:
-    image: ghcr.io/huggingface/text-embeddings-inference:120-1.9
+    image: ghcr.io/huggingface/text-embeddings-inference:86-1.7
     command: ["--model-id", "/data/BAAI/bge-m3", "--auto-truncate"]
     volumes:
       - tei_data:/data
   tei-rerank:
     profiles:
       - tei-gpu
-    image: ghcr.io/huggingface/text-embeddings-inference:120-1.9
+    image: ghcr.io/huggingface/text-embeddings-inference:86-1.7
     hostname: tei-rerank
     ports:
       - 6381:80
