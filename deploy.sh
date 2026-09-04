@@ -32,7 +32,7 @@ docker compose version >/dev/null 2>&1 || { echo "XATO: 'docker compose' (v2) ke
 if [ "${DEVICE:-cpu}" = "gpu" ]; then
   command -v nvidia-smi >/dev/null 2>&1 \
     || echo "    OGOHLANTIRISH: nvidia-smi topilmadi — NVIDIA drayver o'rnatilganmi?"
-  if ! docker info 2>/dev/null | grep -qi nvidia; then
+  if ! $SUDO docker info 2>/dev/null | grep -qi nvidia; then
     echo "    OGOHLANTIRISH: Docker'da NVIDIA runtime ko'rinmadi."
     echo "      NVIDIA Container Toolkit kerak: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html"
   fi
@@ -110,10 +110,10 @@ else
 fi
 
 echo "==> 5/6 Konteynerlarni ishga tushirish (birinchi marta image yuklanadi, biroz kutadi)"
-( cd "$REPO_DIR/docker" && docker compose up -d )
+( cd "$REPO_DIR/docker" && $SUDO docker compose up -d )
 
 echo "==> 6/6 Holat"
-( cd "$REPO_DIR/docker" && docker compose ps )
+( cd "$REPO_DIR/docker" && $SUDO docker compose ps )
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 cat <<EOF
