@@ -4,6 +4,11 @@ O'zbekcha hujjatlar uchun to'liq lokal RAG tizimi. Chat uchun sizning mavjud
 local LLM'ingiz (gemma), embedding uchun serveringizdagi TEI (bge-m3) ishlatiladi.
 Tashqi API'larsiz, hammasi o'z serveringizda.
 
+Bu repo ikki qismdan iborat:
+- **Infratuzilma** (shu fayl) — RAGFlow'ning o'zini deploy qilish (`deploy.sh`).
+- **Backend** ([backend/README.md](backend/README.md)) — har bir kompaniya (tenant)
+  uchun collection/agent yaratib beruvchi FastAPI wrapper, RAGFlow ustida ishlaydi.
+
 ##
 
 ```
