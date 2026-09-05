@@ -54,6 +54,29 @@ class AskResponse(BaseModel):
     raw: dict
 
 
+class RetrieveRequest(BaseModel):
+    agent_id: str = Field(..., description="Qaysi agent collectionlari bo'yicha qidirish")
+    query: str = Field(..., description="Qidiruv savoli")
+    top_k: int = Field(30, ge=1, le=1024, description="Qaytariladigan chunklar soni")
+
+
+class RetrievedChunk(BaseModel):
+    content: str
+    document_name: str
+    document_id: str
+    similarity: float
+    vector_similarity: float
+    term_similarity: float
+
+
+class RetrieveResponse(BaseModel):
+    agent_id: str
+    query: str
+    total: int
+    latency_ms: float
+    chunks: list[RetrievedChunk]
+
+
 class HistoryMessage(BaseModel):
     role: str
     content: str

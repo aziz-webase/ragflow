@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import uuid
 from contextlib import asynccontextmanager
 
@@ -30,6 +31,8 @@ from schemas import (
     CreateAgentRequest,
     CreateTenantRequest,
     CreateTenantResponse,
+    RetrieveRequest,
+    RetrieveResponse,
     UpdateAgentRequest,
 )
 
@@ -270,6 +273,56 @@ async def update_agent(tenant_name: str, agent_id: str, req: UpdateAgentRequest)
         "system_prompt": updated["system_prompt"],
         "ready": updated["chat_id"] is not None,
     }
+
+
+# ---------------------------------------------------------------------
+# RETRIEVE (LLM'siz) — retrieval sifati/latency'ni alohida sinash uchun
+# ---------------------------------------------------------------------
+
+@app.post("/retrieve", response_model=RetrieveResponse)
+async def retrieve(req: RetrieveRequest):
+    """Agent collectionlari bo'yicha faqat retrieval (embedding + rerank) qiladi.
+
+    LLM chaqirilmaydi — natija va latency faqat qidiruv qatlamini aks ettiradi.
+    """
+    agent = await db.get_agent(req.agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{req.agent_id}' topilmadi")
+
+    dataset_ids = await db.agent_dataset_ids(req.agent_id)
+    if not dataset_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="Agentga biriktirilgan collectionlarda dataset yo'q.",
+        )
+
+    start = time.perf_counter()
+    try:
+        resp = await rf.search_datasets(dataset_ids, req.query, top_k=req.top_k)
+    except RAGFlowError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    latency_ms = (time.perf_counter() - start) * 1000
+
+    data = resp.get("data", {}) or {}
+    chunks = [
+        {
+            "content": c.get("content_with_weight", ""),
+            "document_name": c.get("docnm_kwd", ""),
+            "document_id": c.get("doc_id", ""),
+            "similarity": c.get("similarity", 0.0),
+            "vector_similarity": c.get("vector_similarity", 0.0),
+            "term_similarity": c.get("term_similarity", 0.0),
+        }
+        for c in data.get("chunks", []) or []
+    ]
+
+    return RetrieveResponse(
+        agent_id=req.agent_id,
+        query=req.query,
+        total=data.get("total", len(chunks)),
+        latency_ms=round(latency_ms, 1),
+        chunks=chunks,
+    )
 
 
 # ---------------------------------------------------------------------

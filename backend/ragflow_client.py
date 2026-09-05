@@ -266,3 +266,20 @@ async def ask(chat_id: str, session_id: str, question: str, stream: bool = False
         f"/api/v1/chats/{chat_id}/completions",
         json={"question": question, "session_id": session_id, "stream": stream},
     )
+
+
+# ---------------------------------------------------------------------
+# RETRIEVAL-ONLY (LLM'siz) — retrieval sifati/latency'ni alohida sinash uchun
+# ---------------------------------------------------------------------
+
+async def search_datasets(dataset_ids: list[str], question: str, top_k: int = 30) -> dict:
+    """RAGFlow'ning tayyor retrieval-test endpoint'i: embedding + rerank,
+    LLM chaqirmaydi. Javob shakli create_chat_assistant/ask'dagi
+    `reference.chunks`ga o'xshash (`similarity`, `vector_similarity`,
+    `term_similarity`, `content_with_weight`, ...).
+    """
+    return await _request(
+        "POST",
+        "/api/v1/datasets/search",
+        json={"dataset_ids": dataset_ids, "question": question, "top_k": top_k},
+    )
