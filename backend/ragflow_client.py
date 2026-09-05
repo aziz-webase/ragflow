@@ -277,9 +277,14 @@ async def search_datasets(dataset_ids: list[str], question: str, top_k: int = 30
     LLM chaqirmaydi. Javob shakli create_chat_assistant/ask'dagi
     `reference.chunks`ga o'xshash (`similarity`, `vector_similarity`,
     `term_similarity`, `content_with_weight`, ...).
+
+    MUHIM: RAGFlow'da `size` — qaytariladigan natijalar soni (bizning `top_k`
+    shu bilan mos), `top_k` esa vector qidiruvda ko'rib chiqiladigan nomzodlar
+    (rerank'dan oldingi pool, o'zi 1024 default) — bular ikki xil narsa.
+    Shuning uchun bizning `top_k`ni RAGFlow'ning `size` maydoniga yuboramiz.
     """
     return await _request(
         "POST",
         "/api/v1/datasets/search",
-        json={"dataset_ids": dataset_ids, "question": question, "top_k": top_k},
+        json={"dataset_ids": dataset_ids, "question": question, "size": top_k},
     )
