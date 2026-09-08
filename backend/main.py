@@ -155,6 +155,51 @@ async def upload_documents(
     }
 
 
+@app.get("/tenants/{tenant_name}/collections/{collection}/documents")
+async def collection_document_status(tenant_name: str, collection: str):
+    """Collection ichidagi hujjatlarning parse (embedding) holati.
+
+    Upload'dan keyin bu endpoint'ni pollab, `all_ready: true` bo'lishini kutish
+    kerak — shundan keyingina agent yaratish/`/ask` chaqirish mantiqan to'g'ri
+    bo'ladi (aks holda "empty dataset" 409 xatosi yoki hali to'liq bo'lmagan
+    natija olish xavfi bor).
+
+    `status` qiymatlari RAGFlow konvensiyasi: UNSTART, RUNNING, DONE, FAIL, CANCEL.
+    """
+    await _require_tenant(tenant_name)
+    col = await db.get_collection(tenant_name, collection)
+    if col is None:
+        raise HTTPException(status_code=404, detail=f"Collection '{collection}' topilmadi")
+
+    try:
+        docs = await rf.list_all_documents(col["dataset_id"])
+    except RAGFlowError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    out = [
+        {
+            "document_id": d.get("id"),
+            "name": d.get("name"),
+            "status": d.get("run"),
+            "progress": d.get("progress"),
+            "progress_msg": d.get("progress_msg"),
+            "chunk_count": d.get("chunk_count", 0),
+            "ready": d.get("run") == "DONE",
+            "failed": d.get("run") == "FAIL",
+        }
+        for d in docs
+    ]
+
+    return {
+        "tenant_name": tenant_name,
+        "collection": collection,
+        "total": len(out),
+        "all_ready": bool(out) and all(d["ready"] for d in out),
+        "any_failed": any(d["failed"] for d in out),
+        "documents": out,
+    }
+
+
 @app.get("/tenants/{tenant_name}/collections")
 async def list_collections(tenant_name: str):
     """Tenantning barcha collectionlari (agent yaratishda tanlash uchun)."""

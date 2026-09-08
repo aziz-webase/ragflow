@@ -189,8 +189,27 @@ async def parse_documents(dataset_id: str, document_ids: list[str]) -> dict:
     )
 
 
-async def list_documents(dataset_id: str) -> dict:
-    return await _request("GET", f"/api/v1/datasets/{dataset_id}/documents")
+async def list_documents(dataset_id: str, page: int = 1, page_size: int = 100) -> dict:
+    return await _request(
+        "GET",
+        f"/api/v1/datasets/{dataset_id}/documents",
+        params={"page": page, "page_size": page_size},
+    )
+
+
+async def list_all_documents(dataset_id: str) -> list[dict]:
+    """`list_documents`ni sahifalab, datasetdagi barcha hujjatlarni qaytaradi
+    (RAGFlow REST API sahifa hajmini 100 taga cheklaydi)."""
+    docs: list[dict] = []
+    page = 1
+    while True:
+        resp = await list_documents(dataset_id, page=page, page_size=100)
+        batch = resp.get("data", {}).get("docs", []) or []
+        docs.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    return docs
 
 
 async def delete_documents(dataset_id: str, document_ids: list[str]) -> dict:
