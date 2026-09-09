@@ -72,8 +72,11 @@ T=webase   # tenant nomi (istalgan)
 curl -s -X POST http://localhost:8100/tenants/$T/documents \
   -F "collection=hujjatlar" -F "files=@/path/to/fayl.txt"
 
-# 2) Parse tugashini kutib, collectionni tekshiring (document_count > 0 bo'lishi kerak)
-curl -s http://localhost:8100/tenants/$T/collections
+# 2) Parse (embedding) tugashini pollab kutish — all_ready:true bo'lguncha
+#    har 2-3 soniyada qayta chaqiring (hujjat yuklashdan keyin darhol
+#    agent yaratish/`/ask` chaqirish — "hujjat yo'q" 409 xatosiga olib kelishi mumkin)
+curl -s http://localhost:8100/tenants/$T/collections/hujjatlar/documents
+# -> {"all_ready": true/false, "any_failed": false, "documents": [{"status": "DONE", "progress": 1.0, ...}]}
 
 # 3) Agent yaratish (bir yoki bir nechta collection + system prompt)
 curl -s -X POST http://localhost:8100/tenants/$T/agents \
@@ -81,7 +84,12 @@ curl -s -X POST http://localhost:8100/tenants/$T/agents \
   -d '{"agent_name":"yordamchi","collections":["hujjatlar"],"system_prompt":"Sen yordamchisan."}'
 # -> {"agent_id": "...", ...}
 
-# 4) Savol berish (chat assistant shu yerda RAGFlow tomonida lazy yaratiladi)
+# 4a) Faqat retrieval'ni sinash (LLM chaqirilmaydi — sifat/latency alohida tekshirish uchun)
+curl -s -X POST http://localhost:8100/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"<agent_id>","query":"...","top_k":5}'
+
+# 4b) Savol berish (chat assistant shu yerda RAGFlow tomonida lazy yaratiladi)
 curl -s -X POST http://localhost:8100/ask \
   -H "Content-Type: application/json" \
   -d '{"agent_id":"<yuqoridagi agent_id>","user_id":"foydalanuvchi-1","query":"..."}'
@@ -96,10 +104,12 @@ curl -s http://localhost:8100/agents/<agent_id>/users/foydalanuvchi-1/history
 |--------|------|--------|
 | POST | `/tenants/{t}/documents` | `collection` + `files` — hujjat yuklash + parse |
 | GET  | `/tenants/{t}/collections` | collectionlar ro'yxati (tanlash uchun) |
+| GET  | `/tenants/{t}/collections/{collection}/documents` | hujjatlarning parse holati (`status`, `progress`, `all_ready`) — upload'dan keyin shuni pollang |
 | POST | `/tenants/{t}/agents` | `agent_name` + `collections[]` + `system_prompt` → `agent_id` |
 | GET  | `/tenants/{t}/agents` | agentlar ro'yxati |
 | PUT  | `/tenants/{t}/agents/{agent_id}` | agentni tahrirlash |
+| POST | `/retrieve` | `agent_id` + `query` + `top_k` — faqat retrieval (embedding+rerank), LLM'siz |
 | POST | `/ask` | `agent_id`, `user_id`, `query` |
 | GET  | `/agents/{agent_id}/users/{user_id}/history` | user tarixi |
 
-**Tartib:** hujjat yuklash (collection) → parse kutish → agent yaratish (collections tanlab) → `/ask` (agent_id bilan).
+**Tartib:** hujjat yuklash (collection) → `/tenants/{t}/collections/{collection}/documents`ni `all_ready:true` bo'lguncha pollash → agent yaratish (collections tanlab) → `/retrieve` (ixtiyoriy, sifat tekshirish) → `/ask` (agent_id bilan).

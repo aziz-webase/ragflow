@@ -227,6 +227,38 @@ tugaydi (interfeys osilib qoladi, "Added models"da ko'rinmaydi). Avval
 `curl -X POST <base-url>/chat/completions ...` bilan endpoint shu serverdan
 yetib borishini tekshiring.
 
+### Muqobil — OpenAI (LLM + Embedding)
+
+Local GPU/LLM serveriga bog'liq bo'lmaslik uchun LLM va Embedding'ni to'liq
+**OpenAI**ga o'tkazish mumkin — bu sinovdan o'tgan va barqaror ishlaydi
+(local ngrok-orqali-server variantiga qaraganda tezroq va barqarorroq).
+**Rerank OpenAI'da yo'q** — u har doim local (`bge-reranker-v2-m3`, yuqoridagi
+bo'lim) qoladi, RAGFlow provayderlarni aralashtirishga ruxsat beradi.
+
+Hammasi **UI orqali**, alohida config fayl kerak emas:
+
+1. **Model providers** → qidiruvda **OpenAI** → **Add** → `API-Key`ni kiriting
+   (Base URL defolt `https://api.openai.com/v1` qoldiriladi).
+2. **Set default models**:
+   - **LLM** → `gpt-4o-mini` (yoki `gpt-4o`) — OpenAI
+   - **Embedding** → `text-embedding-3-small` (yoki `text-embedding-3-large`) — OpenAI
+   - **Rerank** → o'zgartirmang (`bge-reranker-v2-m3` local qoladi)
+
+> **Muhim:** embedding modeli har bir **dataset yaratilgan paytida** "qotib
+> qoladi" — default'ni o'zgartirish mavjud dataset'larga ta'sir qilmaydi
+> (ular eski embedding modelida qoladi). OpenAI embedding'ni sinash uchun
+> **yangi tenant/collection** bilan yangi hujjat yuklang, shunda u avtomatik
+> yangi default'ni oladi. Solishtirish (bitta hujjat, o'xshash savol):
+>
+> | | Local (bge-m3 + ngrok LLM) | OpenAI (text-embedding-3-small + gpt-4o-mini) |
+> |---|---|---|
+> | Retrieval | ~60-150ms | ~560-700ms (internetga chiqadi) |
+> | To'liq `/ask` | 4-16s (ngrok beqaror) | ~3s (barqaror) |
+>
+> OpenAI umumiy latency bo'yicha yaxshiroq va **barqaror** natija berdi, chunki
+> masofaviy shaxsiy serverga (ngrok orqali) bog'liq emas — to'g'ridan-to'g'ri
+> OpenAI infratuzilmasiga ulanadi.
+
 ## Boshqaruv
 
 ```bash
