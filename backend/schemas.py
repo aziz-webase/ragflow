@@ -33,13 +33,13 @@ class AgentResponse(BaseModel):
     ready: bool = False
 
 
-class AskRequest(BaseModel):
+class ChatRequest(BaseModel):
     agent_id: str = Field(..., description="Qaysi agent bilan suhbat")
     user_id: str = Field(..., description="Foydalanuvchi identifikatori — session shu bo'yicha")
     query: str = Field(..., description="Foydalanuvchi savoli")
 
 
-class AskResponse(BaseModel):
+class ChatResponse(BaseModel):
     agent_id: str
     session_id: str
     answer: str

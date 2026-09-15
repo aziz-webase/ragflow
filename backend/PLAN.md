@@ -12,13 +12,13 @@ agent "support"= [A, C]      + system_prompt_2
 
 - **collection** = RAGFlow dataset (faqat hujjat konteyneri), global unikal nom.
 - **agent** = tanlangan collectionlar + system prompt = RAGFlow chat assistant + metadata, global unikal nom.
-- `/ask` faqat `agent_id` + `user_id` + `query` oladi. Agent o'z collection'lari va promptini biladi.
+- `/chat` faqat `agent_id` + `user_id` + `query` oladi. Agent o'z collection'lari va promptini biladi.
 - Tenant/tashkilot darajasi yo'q — bitta wrapper instansi bitta flat collection/agent
   fazosini boshqaradi. Alohida mijozlar kerak bo'lsa, alohida wrapper deployment
   (alohida Postgres + RAGFlow API key) ishlatiladi.
 
 ## Qarorlar (tasdiqlangan)
-- `/ask` = `agent_id` + `user_id` + `query` (per-user history saqlanadi).
+- `/chat` = `agent_id` + `user_id` + `query` (per-user history saqlanadi).
 - `agent_id` = server UUID; `agent_name` global unikal.
 - `collection_name` global unikal (dataset nomi ham to'g'ridan-to'g'ri shu nom).
 - PUT bilan agent tahrirlanadi (collections/prompt/name); RAGFlow assistant ham yangilanadi.
@@ -35,7 +35,7 @@ agent "support"= [A, C]      + system_prompt_2
 | GET  | `/agents` | agentlar ro'yxati |
 | PUT  | `/agents/{agent_id}` | `{agent_name?, collections?, system_prompt?}` |
 | POST | `/retrieve` | `{agent_id, query, top_k}` → LLM'siz retrieval (embedding+rerank) |
-| POST | `/ask` | `{agent_id, user_id, query}` |
+| POST | `/chat` | `{agent_id, user_id, query}` |
 | POST | `/agents/{agent_id}/users/{user_id}/reset-session` | yangi sessiya |
 | GET  | `/agents/{agent_id}/users/{user_id}/history` | user tarixi |
 
@@ -50,7 +50,7 @@ messages(id PK, agent_id, user_id, role, content, reference JSONB, created_at)
 
 ## RAGFlow mapping
 - agent → chat assistant; agent collectionlari → `dataset_ids`; agent prompt → assistant prompt.
-- Assistant **lazy** yaratiladi (birinchi `/ask` paytida; bo'sh dataset → 102 → 409).
+- Assistant **lazy** yaratiladi (birinchi `/chat` paytida; bo'sh dataset → 102 → 409).
 - PUT'da `update_chat_datasets` / `update_chat_prompt` bilan mavjud assistant yangilanadi.
 - System prompt = persona + majburiy `{knowledge}` bloki (ragflow_client.build_system_prompt).
 - Dataset nomi = collection nomi to'g'ridan-to'g'ri (global unikal bo'lgani uchun

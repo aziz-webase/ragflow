@@ -4,7 +4,7 @@ RAGFlow ustidan agent-based wrapper — FastAPI backend.
 Model:
   collection -> RAGFlow dataset (hujjat konteyneri)
   agent      -> tanlangan collectionlar + system prompt (= RAGFlow chat assistant)
-  /ask       -> faqat agent_id + user_id + query
+  /chat       -> faqat agent_id + user_id + query
 
 Ishga tushirish:
     uvicorn main:app --host 0.0.0.0 --port 8100 --reload
@@ -26,8 +26,8 @@ import db
 import ragflow_client as rf
 from ragflow_client import RAGFlowError
 from schemas import (
-    AskRequest,
-    AskResponse,
+    ChatRequest,
+    ChatResponse,
     CreateAgentRequest,
     RetrieveRequest,
     RetrieveResponse,
@@ -135,7 +135,7 @@ async def collection_document_status(collection: str):
     """Collection ichidagi hujjatlarning parse (embedding) holati.
 
     Upload'dan keyin bu endpoint'ni pollab, `all_ready: true` bo'lishini kutish
-    kerak — shundan keyingina agent yaratish/`/ask` chaqirish mantiqan to'g'ri
+    kerak — shundan keyingina agent yaratish/`/chat` chaqirish mantiqan to'g'ri
     bo'ladi (aks holda "empty dataset" 409 xatosi yoki hali to'liq bo'lmagan
     natija olish xavfi bor).
 
@@ -213,7 +213,7 @@ async def _validate_collections(collections: list[str]) -> None:
 async def create_agent(req: CreateAgentRequest):
     """Tanlangan collectionlar + system prompt asosida agent yaratadi.
 
-    Natijada qaytgan agent_id keyinchalik /ask'da ishlatiladi.
+    Natijada qaytgan agent_id keyinchalik /chat'da ishlatiladi.
     """
     if await db.get_agent_by_name(req.agent_name):
         raise HTTPException(status_code=409, detail="Bu agent nomi allaqachon mavjud")
@@ -338,11 +338,11 @@ async def retrieve(req: RetrieveRequest):
 
 
 # ---------------------------------------------------------------------
-# ASK
+# CHAT
 # ---------------------------------------------------------------------
 
-@app.post("/ask", response_model=AskResponse)
-async def ask(req: AskRequest):
+@app.post("/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest):
     agent = await db.get_agent(req.agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{req.agent_id}' topilmadi")
@@ -367,7 +367,7 @@ async def ask(req: AskRequest):
     await db.add_message(req.agent_id, req.user_id, "user", req.query)
     await db.add_message(req.agent_id, req.user_id, "assistant", answer_text, reference)
 
-    return AskResponse(
+    return ChatResponse(
         agent_id=req.agent_id, session_id=session_id, answer=answer_text, raw=answer_resp
     )
 

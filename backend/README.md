@@ -5,7 +5,7 @@ qilish uchun repo ildizidagi [README.md](../README.md) va `../deploy.sh`ga qaran
 
 - **collection** (= RAGFlow dataset, hujjat konteyneri) — global unikal nom
 - **agent** = tanlangan collectionlar + system prompt (= RAGFlow chat assistant) — global unikal nom
-- **`/ask`** faqat `agent_id` + `user_id` + `query` oladi
+- **`/chat`** faqat `agent_id` + `user_id` + `query` oladi
 - Tenant/tashkilot darajasi yo'q — bitta wrapper bitta flat collection/agent
   fazosini boshqaradi. Alohida mijozlar uchun alohida deployment ishlatiladi.
 - User tarixi PostgreSQL'da saqlanadi
@@ -74,7 +74,7 @@ curl -s -X POST http://localhost:8100/documents \
 
 # 2) Parse (embedding) tugashini pollab kutish — all_ready:true bo'lguncha
 #    har 2-3 soniyada qayta chaqiring (hujjat yuklashdan keyin darhol
-#    agent yaratish/`/ask` chaqirish — "hujjat yo'q" 409 xatosiga olib kelishi mumkin)
+#    agent yaratish/`/chat` chaqirish — "hujjat yo'q" 409 xatosiga olib kelishi mumkin)
 curl -s http://localhost:8100/collections/hujjatlar/documents
 # -> {"all_ready": true/false, "any_failed": false, "documents": [{"status": "DONE", "progress": 1.0, ...}]}
 
@@ -90,7 +90,7 @@ curl -s -X POST http://localhost:8100/retrieve \
   -d '{"agent_id":"<agent_id>","query":"...","top_k":5}'
 
 # 4b) Savol berish (chat assistant shu yerda RAGFlow tomonida lazy yaratiladi)
-curl -s -X POST http://localhost:8100/ask \
+curl -s -X POST http://localhost:8100/chat \
   -H "Content-Type: application/json" \
   -d '{"agent_id":"<yuqoridagi agent_id>","user_id":"foydalanuvchi-1","query":"..."}'
 
@@ -109,8 +109,8 @@ curl -s http://localhost:8100/agents/<agent_id>/users/foydalanuvchi-1/history
 | GET  | `/agents` | agentlar ro'yxati |
 | PUT  | `/agents/{agent_id}` | agentni tahrirlash |
 | POST | `/retrieve` | `agent_id` + `query` + `top_k` — faqat retrieval (embedding+rerank), LLM'siz |
-| POST | `/ask` | `agent_id`, `user_id`, `query` |
+| POST | `/chat` | `agent_id`, `user_id`, `query` |
 | POST | `/agents/{agent_id}/users/{user_id}/reset-session` | yangi (bo'sh) sessiya boshlash |
 | GET  | `/agents/{agent_id}/users/{user_id}/history` | user tarixi |
 
-**Tartib:** hujjat yuklash (collection) → `/collections/{collection}/documents`ni `all_ready:true` bo'lguncha pollash → agent yaratish (collections tanlab) → `/retrieve` (ixtiyoriy, sifat tekshirish) → `/ask` (agent_id bilan).
+**Tartib:** hujjat yuklash (collection) → `/collections/{collection}/documents`ni `all_ready:true` bo'lguncha pollash → agent yaratish (collections tanlab) → `/retrieve` (ixtiyoriy, sifat tekshirish) → `/chat` (agent_id bilan).

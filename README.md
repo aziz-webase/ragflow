@@ -121,7 +121,7 @@ konteynerlarni ko'taradi.
 RAGFlow o'zi ko'targandan va yuqoridagi qo'lda qadamlar (LLM/embedding/rerank
 ulash, API kalit olish) bajarilgandan keyin, **collection/agent yaratib
 beruvchi** FastAPI wrapper `backend/` papkasida turadi — u RAGFlow ustida
-ishlaydi: collection (hujjatlar) → agent (collection + system prompt) → `/ask`.
+ishlaydi: collection (hujjatlar) → agent (collection + system prompt) → `/chat`.
 
 To'liq qo'llanma: [backend/README.md](backend/README.md). Qisqacha:
 
@@ -252,7 +252,7 @@ Hammasi **UI orqali**, alohida config fayl kerak emas:
 > | | Local (bge-m3 + ngrok LLM) | OpenAI (text-embedding-3-small + gpt-4o-mini) |
 > |---|---|---|
 > | Retrieval | ~60-150ms | ~560-700ms (internetga chiqadi) |
-> | To'liq `/ask` | 4-16s (ngrok beqaror) | ~3s (barqaror) |
+> | To'liq `/chat` | 4-16s (ngrok beqaror) | ~3s (barqaror) |
 >
 > OpenAI umumiy latency bo'yicha yaxshiroq va **barqaror** natija berdi, chunki
 > masofaviy shaxsiy serverga (ngrok orqali) bog'liq emas — to'g'ridan-to'g'ri
