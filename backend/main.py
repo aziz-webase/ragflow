@@ -2,9 +2,9 @@
 RAGFlow ustidan agent-based wrapper — FastAPI backend.
 
 Model:
-  tenant     -> ko'p collection (har biri RAGFlow dataset, hujjat konteyneri)
+  collection -> RAGFlow dataset (hujjat konteyneri)
   agent      -> tanlangan collectionlar + system prompt (= RAGFlow chat assistant)
-  /ask       -> faqat agent_id + user_id + query
+  /chat       -> faqat agent_id + user_id + query
 
 Ishga tushirish:
     uvicorn main:app --host 0.0.0.0 --port 8100 --reload
@@ -26,11 +26,9 @@ import db
 import ragflow_client as rf
 from ragflow_client import RAGFlowError
 from schemas import (
-    AskRequest,
-    AskResponse,
+    ChatRequest,
+    ChatResponse,
     CreateAgentRequest,
-    CreateTenantRequest,
-    CreateTenantResponse,
     RetrieveRequest,
     RetrieveResponse,
     UpdateAgentRequest,
@@ -45,15 +43,7 @@ async def lifespan(app: FastAPI):
     await rf.close_client()
 
 
-app = FastAPI(title="RAGFlow Wrapper API", version="3.0.0", lifespan=lifespan)
-
-
-async def _require_tenant(tenant_name: str) -> None:
-    if not await db.tenant_exists(tenant_name):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Tenant '{tenant_name}' topilmadi. Avval hujjat yuklang yoki /tenants orqali yarating.",
-        )
+app = FastAPI(title="RAGFlow Wrapper API", version="4.0.0", lifespan=lifespan)
 
 
 def _empty_dataset_error() -> HTTPException:
@@ -79,7 +69,7 @@ async def _ensure_agent_chat(agent) -> str:
         )
     try:
         resp = await rf.create_chat_assistant(
-            name=f"{agent['tenant_name']}__{agent['agent_name']}__{uuid.uuid4().hex[:6]}",
+            name=f"{agent['agent_name']}__{uuid.uuid4().hex[:6]}",
             dataset_ids=dataset_ids,
             persona=agent["system_prompt"],
         )
@@ -93,23 +83,11 @@ async def _ensure_agent_chat(agent) -> str:
 
 
 # ---------------------------------------------------------------------
-# TENANT
-# ---------------------------------------------------------------------
-
-@app.post("/tenants", response_model=CreateTenantResponse)
-async def create_tenant(req: CreateTenantRequest):
-    """Tenantni ro'yxatga oladi (hujjat yuklashda ham avtomatik yaratiladi)."""
-    await db.ensure_tenant(req.tenant_name)
-    return CreateTenantResponse(tenant_name=req.tenant_name)
-
-
-# ---------------------------------------------------------------------
 # DOCUMENT INGEST (collection = hujjat konteyneri)
 # ---------------------------------------------------------------------
 
-@app.post("/tenants/{tenant_name}/documents")
+@app.post("/documents")
 async def upload_documents(
-    tenant_name: str,
     collection: str = Form(..., description="Collection nomi (majburiy)"),
     files: list[UploadFile] = File(...),
 ):
@@ -117,15 +95,13 @@ async def upload_documents(
 
     Collection yangi bo'lsa — yangi RAGFlow dataset yaratiladi.
     """
-    await db.ensure_tenant(tenant_name)
-
-    col = await db.get_collection(tenant_name, collection)
+    col = await db.get_collection(collection)
     if col is None:
         try:
-            ds_resp = await rf.create_dataset(name=f"{tenant_name}__{collection}")
+            ds_resp = await rf.create_dataset(name=collection)
         except RAGFlowError as e:
             raise HTTPException(status_code=502, detail=str(e))
-        col = await db.create_collection(tenant_name, collection, ds_resp["data"]["id"])
+        col = await db.create_collection(collection, ds_resp["data"]["id"])
     dataset_id = col["dataset_id"]
 
     tmp_dir = tempfile.mkdtemp(prefix="ragflow_upload_")
@@ -146,7 +122,6 @@ async def upload_documents(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return {
-        "tenant_name": tenant_name,
         "collection": collection,
         "dataset_id": dataset_id,
         "document_ids": document_ids,
@@ -155,11 +130,53 @@ async def upload_documents(
     }
 
 
-@app.get("/tenants/{tenant_name}/collections")
-async def list_collections(tenant_name: str):
-    """Tenantning barcha collectionlari (agent yaratishda tanlash uchun)."""
-    await _require_tenant(tenant_name)
-    cols = await db.list_collections(tenant_name)
+@app.get("/collections/{collection}/documents")
+async def collection_document_status(collection: str):
+    """Collection ichidagi hujjatlarning parse (embedding) holati.
+
+    Upload'dan keyin bu endpoint'ni pollab, `all_ready: true` bo'lishini kutish
+    kerak — shundan keyingina agent yaratish/`/chat` chaqirish mantiqan to'g'ri
+    bo'ladi (aks holda "empty dataset" 409 xatosi yoki hali to'liq bo'lmagan
+    natija olish xavfi bor).
+
+    `status` qiymatlari RAGFlow konvensiyasi: UNSTART, RUNNING, DONE, FAIL, CANCEL.
+    """
+    col = await db.get_collection(collection)
+    if col is None:
+        raise HTTPException(status_code=404, detail=f"Collection '{collection}' topilmadi")
+
+    try:
+        docs = await rf.list_all_documents(col["dataset_id"])
+    except RAGFlowError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    out = [
+        {
+            "document_id": d.get("id"),
+            "name": d.get("name"),
+            "status": d.get("run"),
+            "progress": d.get("progress"),
+            "progress_msg": d.get("progress_msg"),
+            "chunk_count": d.get("chunk_count", 0),
+            "ready": d.get("run") == "DONE",
+            "failed": d.get("run") == "FAIL",
+        }
+        for d in docs
+    ]
+
+    return {
+        "collection": collection,
+        "total": len(out),
+        "all_ready": bool(out) and all(d["ready"] for d in out),
+        "any_failed": any(d["failed"] for d in out),
+        "documents": out,
+    }
+
+
+@app.get("/collections")
+async def list_collections():
+    """Barcha collectionlar (agent yaratishda tanlash uchun)."""
+    cols = await db.list_collections()
 
     doc_counts: dict[str, int] = {}
     try:
@@ -183,8 +200,8 @@ async def list_collections(tenant_name: str):
 # AGENTS
 # ---------------------------------------------------------------------
 
-async def _validate_collections(tenant_name: str, collections: list[str]) -> None:
-    missing = [c for c in collections if not await db.get_collection(tenant_name, c)]
+async def _validate_collections(collections: list[str]) -> None:
+    missing = [c for c in collections if not await db.get_collection(c)]
     if missing:
         raise HTTPException(
             status_code=400,
@@ -192,21 +209,18 @@ async def _validate_collections(tenant_name: str, collections: list[str]) -> Non
         )
 
 
-@app.post("/tenants/{tenant_name}/agents")
-async def create_agent(tenant_name: str, req: CreateAgentRequest):
+@app.post("/agents")
+async def create_agent(req: CreateAgentRequest):
     """Tanlangan collectionlar + system prompt asosida agent yaratadi.
 
-    Natijada qaytgan agent_id keyinchalik /ask'da ishlatiladi.
+    Natijada qaytgan agent_id keyinchalik /chat'da ishlatiladi.
     """
-    await _require_tenant(tenant_name)
-    if await db.get_agent_by_name(tenant_name, req.agent_name):
+    if await db.get_agent_by_name(req.agent_name):
         raise HTTPException(status_code=409, detail="Bu agent nomi allaqachon mavjud")
-    await _validate_collections(tenant_name, req.collections)
+    await _validate_collections(req.collections)
 
     agent_id = uuid.uuid4().hex
-    await db.create_agent(
-        agent_id, tenant_name, req.agent_name, req.system_prompt, req.collections
-    )
+    await db.create_agent(agent_id, req.agent_name, req.system_prompt, req.collections)
     return {
         "agent_id": agent_id,
         "agent_name": req.agent_name,
@@ -216,10 +230,9 @@ async def create_agent(tenant_name: str, req: CreateAgentRequest):
     }
 
 
-@app.get("/tenants/{tenant_name}/agents")
-async def list_agents(tenant_name: str):
-    await _require_tenant(tenant_name)
-    agents = await db.list_agents(tenant_name)
+@app.get("/agents")
+async def list_agents():
+    agents = await db.list_agents()
     out = []
     for a in agents:
         out.append(
@@ -234,20 +247,19 @@ async def list_agents(tenant_name: str):
     return out
 
 
-@app.put("/tenants/{tenant_name}/agents/{agent_id}")
-async def update_agent(tenant_name: str, agent_id: str, req: UpdateAgentRequest):
+@app.put("/agents/{agent_id}")
+async def update_agent(agent_id: str, req: UpdateAgentRequest):
     """Agent nomi / collectionlari / promptini yangilaydi (RAGFlow assistant ham)."""
-    await _require_tenant(tenant_name)
     agent = await db.get_agent(agent_id)
-    if not agent or agent["tenant_name"] != tenant_name:
+    if not agent:
         raise HTTPException(status_code=404, detail="Agent topilmadi")
 
     if req.agent_name and req.agent_name != agent["agent_name"]:
-        existing = await db.get_agent_by_name(tenant_name, req.agent_name)
+        existing = await db.get_agent_by_name(req.agent_name)
         if existing:
             raise HTTPException(status_code=409, detail="Bu agent nomi allaqachon mavjud")
     if req.collections is not None:
-        await _validate_collections(tenant_name, req.collections)
+        await _validate_collections(req.collections)
 
     await db.update_agent(agent_id, req.agent_name, req.system_prompt, req.collections)
 
@@ -326,11 +338,11 @@ async def retrieve(req: RetrieveRequest):
 
 
 # ---------------------------------------------------------------------
-# ASK
+# CHAT
 # ---------------------------------------------------------------------
 
-@app.post("/ask", response_model=AskResponse)
-async def ask(req: AskRequest):
+@app.post("/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest):
     agent = await db.get_agent(req.agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{req.agent_id}' topilmadi")
@@ -355,7 +367,7 @@ async def ask(req: AskRequest):
     await db.add_message(req.agent_id, req.user_id, "user", req.query)
     await db.add_message(req.agent_id, req.user_id, "assistant", answer_text, reference)
 
-    return AskResponse(
+    return ChatResponse(
         agent_id=req.agent_id, session_id=session_id, answer=answer_text, raw=answer_resp
     )
 
