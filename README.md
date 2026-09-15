@@ -6,8 +6,8 @@ Tashqi API'larsiz, hammasi o'z serveringizda.
 
 Bu repo ikki qismdan iborat:
 - **Infratuzilma** (shu fayl) — RAGFlow'ning o'zini deploy qilish (`deploy.sh`).
-- **Backend** ([backend/README.md](backend/README.md)) — har bir kompaniya (tenant)
-  uchun collection/agent yaratib beruvchi FastAPI wrapper, RAGFlow ustida ishlaydi.
+- **Backend** ([backend/README.md](backend/README.md)) — collection/agent yaratib
+  beruvchi FastAPI wrapper, RAGFlow ustida ishlaydi.
 
 ##
 
@@ -116,13 +116,12 @@ konteynerlarni ko'taradi.
    python test_api.py
    ```
 
-## Backend — kompaniyalar uchun agent API
+## Backend — agent API
 
 RAGFlow o'zi ko'targandan va yuqoridagi qo'lda qadamlar (LLM/embedding/rerank
-ulash, API kalit olish) bajarilgandan keyin, **har bir kompaniya (tenant) uchun
-alohida agent yaratib beruvchi** FastAPI wrapper `backend/` papkasida turadi —
-u RAGFlow ustida ishlaydi: tenant → collection (hujjatlar) → agent (collection +
-system prompt) → `/ask`.
+ulash, API kalit olish) bajarilgandan keyin, **collection/agent yaratib
+beruvchi** FastAPI wrapper `backend/` papkasida turadi — u RAGFlow ustida
+ishlaydi: collection (hujjatlar) → agent (collection + system prompt) → `/ask`.
 
 To'liq qo'llanma: [backend/README.md](backend/README.md). Qisqacha:
 
@@ -130,7 +129,7 @@ To'liq qo'llanma: [backend/README.md](backend/README.md). Qisqacha:
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-# Wrapper'ning o'z ma'lumotlari (tenant/agent/tarix) uchun alohida Postgres:
+# Wrapper'ning o'z ma'lumotlari (collection/agent/tarix) uchun alohida Postgres:
 sudo -u postgres psql -c "CREATE ROLE ragflow WITH LOGIN PASSWORD 'ragflow';"
 sudo -u postgres psql -c "CREATE DATABASE ragflow_wrapper OWNER ragflow;"
 
@@ -247,7 +246,7 @@ Hammasi **UI orqali**, alohida config fayl kerak emas:
 > **Muhim:** embedding modeli har bir **dataset yaratilgan paytida** "qotib
 > qoladi" — default'ni o'zgartirish mavjud dataset'larga ta'sir qilmaydi
 > (ular eski embedding modelida qoladi). OpenAI embedding'ni sinash uchun
-> **yangi tenant/collection** bilan yangi hujjat yuklang, shunda u avtomatik
+> **yangi collection** bilan yangi hujjat yuklang, shunda u avtomatik
 > yangi default'ni oladi. Solishtirish (bitta hujjat, o'xshash savol):
 >
 > | | Local (bge-m3 + ngrok LLM) | OpenAI (text-embedding-3-small + gpt-4o-mini) |

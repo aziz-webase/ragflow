@@ -3,16 +3,8 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field, model_validator
 
 
-class CreateTenantRequest(BaseModel):
-    tenant_name: str = Field(..., description="Tenant/mijoz uchun unikal nom, masalan 'acme_corp'")
-
-
-class CreateTenantResponse(BaseModel):
-    tenant_name: str
-
-
 class CreateAgentRequest(BaseModel):
-    agent_name: str = Field(..., description="Agent nomi (tenant ichida unikal)")
+    agent_name: str = Field(..., description="Agent nomi (global unikal)")
     collections: list[str] = Field(
         ..., min_length=1, description="Agent foydalanadigan collection nomlari"
     )

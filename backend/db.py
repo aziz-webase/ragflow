@@ -2,8 +2,7 @@
 PostgreSQL qatlami (asyncpg + connection pool).
 
 Model:
-  tenant                     -> ro'yxatdan o'tgan tashkilot
-  (tenant, collection)       -> ragflow dataset (hujjat konteyneri)
+  collection                 -> ragflow dataset (hujjat konteyneri)
   agent                      -> tanlangan collectionlar + system prompt
                                 (= ragflow chat assistant + metadata)
   (agent_id, user_id)        -> ragflow session_id
@@ -46,33 +45,23 @@ async def init_db() -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS tenants (
-                tenant_name TEXT PRIMARY KEY,
-                created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-            );
-
             CREATE TABLE IF NOT EXISTS collections (
-                id              BIGSERIAL PRIMARY KEY,
-                tenant_name     TEXT NOT NULL REFERENCES tenants(tenant_name) ON DELETE CASCADE,
-                collection_name TEXT NOT NULL,
+                collection_name TEXT PRIMARY KEY,
                 dataset_id      TEXT NOT NULL,
-                created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-                UNIQUE (tenant_name, collection_name)
+                created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
             );
 
             CREATE TABLE IF NOT EXISTS agents (
                 agent_id      TEXT PRIMARY KEY,
-                tenant_name   TEXT NOT NULL REFERENCES tenants(tenant_name) ON DELETE CASCADE,
-                agent_name    TEXT NOT NULL,
+                agent_name    TEXT NOT NULL UNIQUE,
                 system_prompt TEXT,
                 chat_id       TEXT,
-                created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-                UNIQUE (tenant_name, agent_name)
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
             );
 
             CREATE TABLE IF NOT EXISTS agent_collections (
                 agent_id        TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
-                collection_name TEXT NOT NULL,
+                collection_name TEXT NOT NULL REFERENCES collections(collection_name) ON DELETE CASCADE,
                 PRIMARY KEY (agent_id, collection_name)
             );
 
@@ -101,67 +90,41 @@ async def init_db() -> None:
         )
 
 
-# ---------- tenants ----------
-
-async def ensure_tenant(tenant_name: str) -> None:
-    pool = _require_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO tenants (tenant_name) VALUES ($1) ON CONFLICT DO NOTHING",
-            tenant_name,
-        )
-
-
-async def tenant_exists(tenant_name: str) -> bool:
-    pool = _require_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT 1 FROM tenants WHERE tenant_name = $1", tenant_name)
-        return row is not None
-
-
 # ---------- collections ----------
 
-async def get_collection(tenant_name: str, collection_name: str) -> Optional[asyncpg.Record]:
+async def get_collection(collection_name: str) -> Optional[asyncpg.Record]:
     pool = _require_pool()
     async with pool.acquire() as conn:
         return await conn.fetchrow(
-            "SELECT * FROM collections WHERE tenant_name = $1 AND collection_name = $2",
-            tenant_name,
+            "SELECT * FROM collections WHERE collection_name = $1",
             collection_name,
         )
 
 
-async def create_collection(
-    tenant_name: str, collection_name: str, dataset_id: str
-) -> asyncpg.Record:
+async def create_collection(collection_name: str, dataset_id: str) -> asyncpg.Record:
     pool = _require_pool()
     async with pool.acquire() as conn:
         return await conn.fetchrow(
             """
-            INSERT INTO collections (tenant_name, collection_name, dataset_id)
-            VALUES ($1, $2, $3)
+            INSERT INTO collections (collection_name, dataset_id)
+            VALUES ($1, $2)
             RETURNING *
             """,
-            tenant_name,
             collection_name,
             dataset_id,
         )
 
 
-async def list_collections(tenant_name: str) -> list[asyncpg.Record]:
+async def list_collections() -> list[asyncpg.Record]:
     pool = _require_pool()
     async with pool.acquire() as conn:
-        return await conn.fetch(
-            "SELECT * FROM collections WHERE tenant_name = $1 ORDER BY created_at",
-            tenant_name,
-        )
+        return await conn.fetch("SELECT * FROM collections ORDER BY created_at")
 
 
 # ---------- agents ----------
 
 async def create_agent(
     agent_id: str,
-    tenant_name: str,
     agent_name: str,
     system_prompt: Optional[str],
     collections: list[str],
@@ -171,11 +134,10 @@ async def create_agent(
         async with conn.transaction():
             await conn.execute(
                 """
-                INSERT INTO agents (agent_id, tenant_name, agent_name, system_prompt)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO agents (agent_id, agent_name, system_prompt)
+                VALUES ($1, $2, $3)
                 """,
                 agent_id,
-                tenant_name,
                 agent_name,
                 system_prompt,
             )
@@ -191,23 +153,16 @@ async def get_agent(agent_id: str) -> Optional[asyncpg.Record]:
         return await conn.fetchrow("SELECT * FROM agents WHERE agent_id = $1", agent_id)
 
 
-async def get_agent_by_name(tenant_name: str, agent_name: str) -> Optional[asyncpg.Record]:
+async def get_agent_by_name(agent_name: str) -> Optional[asyncpg.Record]:
     pool = _require_pool()
     async with pool.acquire() as conn:
-        return await conn.fetchrow(
-            "SELECT * FROM agents WHERE tenant_name = $1 AND agent_name = $2",
-            tenant_name,
-            agent_name,
-        )
+        return await conn.fetchrow("SELECT * FROM agents WHERE agent_name = $1", agent_name)
 
 
-async def list_agents(tenant_name: str) -> list[asyncpg.Record]:
+async def list_agents() -> list[asyncpg.Record]:
     pool = _require_pool()
     async with pool.acquire() as conn:
-        return await conn.fetch(
-            "SELECT * FROM agents WHERE tenant_name = $1 ORDER BY created_at",
-            tenant_name,
-        )
+        return await conn.fetch("SELECT * FROM agents ORDER BY created_at")
 
 
 async def get_agent_collections(agent_id: str) -> list[str]:
@@ -228,9 +183,7 @@ async def agent_dataset_ids(agent_id: str) -> list[str]:
             """
             SELECT c.dataset_id
             FROM agent_collections ac
-            JOIN agents a ON a.agent_id = ac.agent_id
-            JOIN collections c
-              ON c.tenant_name = a.tenant_name AND c.collection_name = ac.collection_name
+            JOIN collections c ON c.collection_name = ac.collection_name
             WHERE ac.agent_id = $1
             ORDER BY c.created_at
             """,
