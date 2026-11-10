@@ -1,0 +1,22 @@
+[Unit]
+Description=RAGFlow Wrapper API (FastAPI backend/main.py)
+After=network-online.target postgresql.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=doppiai
+Group=doppiai
+# config.py .env faylni joriy papkadan o'qiydi — shuning uchun backend papkasi
+WorkingDirectory=/home/doppiai/ragflow/backend
+Environment=PYTHONUNBUFFERED=1
+# 8100 portni market-radar band qilgan, shuning uchun 8110
+ExecStart=/home/doppiai/ragflow/backend/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8110 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

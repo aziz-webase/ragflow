@@ -11,6 +11,7 @@ Ishga tushirish:
 Swagger UI:
     http://localhost:8100/docs
 """
+import hmac
 import json
 import os
 import shutil
@@ -18,12 +19,24 @@ import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
+from typing import Optional
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 import db
+import instagram as ig
 import ragflow_client as rf
+from config import get_settings
 from ragflow_client import RAGFlowError
 from schemas import (
     ChatRequest,
@@ -41,8 +54,10 @@ async def lifespan(app: FastAPI):
     yield
     await db.disconnect()
     await rf.close_client()
+    await ig.close_client()
 
 
+settings = get_settings()
 app = FastAPI(title="RAGFlow Wrapper API", version="4.0.0", lifespan=lifespan)
 
 
@@ -341,22 +356,25 @@ async def retrieve(req: RetrieveRequest):
 # CHAT
 # ---------------------------------------------------------------------
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
-    agent = await db.get_agent(req.agent_id)
+async def _run_chat(agent_id: str, user_id: str, query: str) -> tuple[str, str, dict]:
+    """Agentga savol beradi, session va tarixni saqlaydi.
+
+    /chat va Instagram webhook uchun umumiy. Qaytaradi: (session_id, answer, raw).
+    """
+    agent = await db.get_agent(agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent '{req.agent_id}' topilmadi")
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' topilmadi")
 
     chat_id = await _ensure_agent_chat(agent)
 
-    session_id = await db.get_session(req.agent_id, req.user_id)
+    session_id = await db.get_session(agent_id, user_id)
     try:
         if not session_id:
-            sess = await rf.create_session(chat_id, session_name=f"{req.user_id}")
+            sess = await rf.create_session(chat_id, session_name=f"{user_id}")
             session_id = sess["data"]["id"]
-            await db.save_session(req.agent_id, req.user_id, session_id, chat_id)
+            await db.save_session(agent_id, user_id, session_id, chat_id)
 
-        answer_resp = await rf.ask(chat_id, session_id, req.query, stream=False)
+        answer_resp = await rf.ask(chat_id, session_id, query, stream=False)
     except RAGFlowError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -364,12 +382,75 @@ async def chat(req: ChatRequest):
     answer_text = data.get("answer", "") if isinstance(data, dict) else ""
     reference = data.get("reference") if isinstance(data, dict) else None
 
-    await db.add_message(req.agent_id, req.user_id, "user", req.query)
-    await db.add_message(req.agent_id, req.user_id, "assistant", answer_text, reference)
+    await db.add_message(agent_id, user_id, "user", query)
+    await db.add_message(agent_id, user_id, "assistant", answer_text, reference)
+    return session_id, answer_text, answer_resp
 
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest):
+    session_id, answer_text, answer_resp = await _run_chat(req.agent_id, req.user_id, req.query)
     return ChatResponse(
         agent_id=req.agent_id, session_id=session_id, answer=answer_text, raw=answer_resp
     )
+
+
+# ---------------------------------------------------------------------
+# INSTAGRAM (Meta webhook)
+# ---------------------------------------------------------------------
+
+@app.get("/instagram/webhook", tags=["instagram"])
+async def verify(
+    hub_mode: Optional[str] = Query(None, alias="hub.mode"),
+    hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
+    hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
+):
+    """Meta webhook tasdiqlash: verify_token mos kelsa hub.challenge'ni qaytaradi."""
+    if (
+        hub_mode == "subscribe"
+        and settings.ig_verify_token
+        and hub_verify_token
+        and hmac.compare_digest(hub_verify_token, settings.ig_verify_token)
+    ):
+        return PlainTextResponse(hub_challenge or "")
+    raise HTTPException(status_code=403, detail="Verify token noto'g'ri")
+
+
+async def _answer_instagram(sender_id: str, text: str) -> None:
+    """Fonda: xabarni agentga beradi va javobni Instagram'ga yuboradi."""
+    try:
+        _, answer, _ = await _run_chat(settings.rag_agent_id, f"ig_{sender_id}", text)
+        answer = ig.clean_answer(answer)
+        if answer:
+            await ig.send_text(sender_id, answer)
+    except HTTPException as e:
+        ig.log.error("Instagram javob xatosi (sender=%s): %s", sender_id, e.detail)
+    except Exception:
+        ig.log.exception("Instagram javob xatosi (sender=%s)", sender_id)
+
+
+@app.post("/instagram/webhook", tags=["instagram"])
+async def receive(request: Request, background_tasks: BackgroundTasks):
+    """Meta'dan kelgan Instagram xabarlarini qabul qiladi; javob fonda yuboriladi."""
+    raw = await request.body()
+    if not ig.verify_signature(raw, request.headers.get("x-hub-signature-256")):
+        raise HTTPException(status_code=403, detail="Imzo (X-Hub-Signature-256) noto'g'ri")
+    try:
+        payload = json.loads(raw or b"{}")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="JSON noto'g'ri")
+
+    if not settings.rag_agent_id:
+        ig.log.error("RAG_AGENT_ID sozlanmagan — Instagram xabarlari javobsiz qoladi")
+        return {"status": "ignored"}
+
+    queued = 0
+    for m in ig.extract_text_messages(payload):
+        if ig.is_duplicate(m["mid"]):
+            continue
+        background_tasks.add_task(_answer_instagram, m["sender_id"], m["text"])
+        queued += 1
+    return {"status": "ok", "queued": queued}
 
 
 @app.post("/agents/{agent_id}/users/{user_id}/reset-session")
