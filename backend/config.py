@@ -31,8 +31,20 @@ class Settings(BaseSettings):
     # Masalan: "BAAI/bge-reranker-v2-m3@HuggingFace"
     rag_rerank_id: str = os.getenv("RAG_RERANK_ID", "")
 
+    # --- Instagram (Meta webhook) ---
+    # Meta App Dashboard'dagi "Verify token" bilan bir xil bo'lishi kerak
+    ig_verify_token: str = os.getenv("IG_VERIFY_TOKEN", "")
+    # X-Hub-Signature-256 imzosini tekshirish uchun (bo'sh -> tekshirilmaydi)
+    ig_app_secret: str = os.getenv("IG_APP_SECRET", "")
+    # Javob yuborish uchun Instagram user access token
+    ig_access_token: str = os.getenv("IG_ACCESS_TOKEN", "")
+    ig_api_version: str = os.getenv("IG_API_VERSION", "v23.0")
+    # Instagram xabarlariga qaysi agent javob beradi
+    rag_agent_id: str = os.getenv("RAG_AGENT_ID", "")
+
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 
 @lru_cache

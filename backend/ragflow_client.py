@@ -114,22 +114,33 @@ def build_system_prompt(persona: Optional[str]) -> str:
 
 
 def _prompt_config(persona: Optional[str]) -> dict:
-    """RAGFlow chat assistant uchun to'liq prompt_config.
+    """RAGFlow chat assistant uchun prompt_config (system prompt + knowledge parametri).
 
-    MUHIM: RAGFlow custom system prompt va retrieval sozlamalarini
-    `prompt_config` kaliti ostida kutadi (`prompt` emas — u jimgina IGNORE qilinadi).
+    MUHIM: `prompt` emas, `prompt_config` kaliti kerak — `prompt` jimgina IGNORE qilinadi.
+    Retrieval sozlamalari (top_n, rerank_id, ...) bu yerga EMAS — `_retrieval_fields()`ga.
     """
-    cfg: dict[str, Any] = {
+    return {
         "system": build_system_prompt(persona),
         "parameters": [{"key": "knowledge", "optional": False}],
+    }
+
+
+def _retrieval_fields() -> dict:
+    """Chat assistant (dialog) ning top-level retrieval maydonlari.
+
+    RAGFlow v0.26 bularni chat obyektining o'zida (top-level) o'qiydi; `prompt_config`
+    ichiga qo'yilsa jimgina e'tiborsiz qoldiriladi (rerank ishlamay qoladi).
+    RAGFlow'da `vector_similarity_weight` = vektor og'irligi, keyword og'irligi = 1 - shu.
+    """
+    fields: dict[str, Any] = {
         "top_n": settings.rag_top_n,
         "similarity_threshold": settings.rag_similarity_threshold,
-        "keywords_similarity_weight": settings.rag_keywords_weight,
+        "vector_similarity_weight": round(1 - settings.rag_keywords_weight, 4),
     }
-    # Rerank model sozlangan bo'lsagina qo'shamiz (bo'sh string RAGFlow'da xato beradi)
+    # Rerank model sozlangan bo'lsagina qo'shamiz
     if settings.rag_rerank_id:
-        cfg["rerank_id"] = settings.rag_rerank_id
-    return cfg
+        fields["rerank_id"] = settings.rag_rerank_id
+    return fields
 
 
 # ---------------------------------------------------------------------
@@ -233,8 +244,10 @@ async def create_chat_assistant(
     payload: dict[str, Any] = {
         "name": name,
         "dataset_ids": dataset_ids,
-        "llm": {"model_name": llm_id or settings.default_llm_id},
+        # v0.26: top-level `llm_id` (eski `llm.model_name` IGNORE qilinadi)
+        "llm_id": llm_id or settings.default_llm_id,
         "prompt_config": _prompt_config(persona),
+        **_retrieval_fields(),
     }
     return await _request("POST", "/api/v1/chats", json=payload)
 
@@ -244,7 +257,9 @@ async def update_chat_assistant(chat_id: str, **fields) -> dict:
 
 
 async def update_chat_prompt(chat_id: str, persona: Optional[str]) -> dict:
-    return await update_chat_assistant(chat_id, prompt_config=_prompt_config(persona))
+    return await update_chat_assistant(
+        chat_id, prompt_config=_prompt_config(persona), **_retrieval_fields()
+    )
 
 
 async def update_chat_datasets(chat_id: str, dataset_ids: list[str]) -> dict:
@@ -305,5 +320,11 @@ async def search_datasets(dataset_ids: list[str], question: str, top_k: int = 30
     return await _request(
         "POST",
         "/api/v1/datasets/search",
-        json={"dataset_ids": dataset_ids, "question": question, "size": top_k},
+        json={
+            "dataset_ids": dataset_ids,
+            "question": question,
+            "size": top_k,
+            # chat bilan bir xil retrieval sozlamalari (top_n bu yerda `size`)
+            **{k: v for k, v in _retrieval_fields().items() if k != "top_n"},
+        },
     )
