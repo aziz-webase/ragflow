@@ -18,12 +18,12 @@ import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Form, HTTPException, UploadFile, File
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 import db
 import ragflow_client as rf
+from instagram_multi import router as instagram_router, start_token_refresher
 from ragflow_client import RAGFlowError
 from schemas import (
     ChatRequest,
@@ -38,12 +38,16 @@ from schemas import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
+    # Instagram tokenlarini kunlik yangilash (lifespan ishlatilgani uchun
+    # @app.on_event("startup") bu yerda ishlamaydi — shu sababli shu yerda)
+    start_token_refresher()
     yield
     await db.disconnect()
     await rf.close_client()
 
 
 app = FastAPI(title="RAGFlow Wrapper API", version="4.0.0", lifespan=lifespan)
+app.include_router(instagram_router)
 
 
 def _empty_dataset_error() -> HTTPException:
@@ -341,22 +345,25 @@ async def retrieve(req: RetrieveRequest):
 # CHAT
 # ---------------------------------------------------------------------
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
-    agent = await db.get_agent(req.agent_id)
+async def _run_chat(agent_id: str, user_id: str, query: str) -> tuple[str, str, dict]:
+    """Agentga savol beradi, session va tarixni saqlaydi.
+
+    /chat va Instagram webhook uchun umumiy. Qaytaradi: (session_id, answer, raw).
+    """
+    agent = await db.get_agent(agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent '{req.agent_id}' topilmadi")
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' topilmadi")
 
     chat_id = await _ensure_agent_chat(agent)
 
-    session_id = await db.get_session(req.agent_id, req.user_id)
+    session_id = await db.get_session(agent_id, user_id)
     try:
         if not session_id:
-            sess = await rf.create_session(chat_id, session_name=f"{req.user_id}")
+            sess = await rf.create_session(chat_id, session_name=f"{user_id}")
             session_id = sess["data"]["id"]
-            await db.save_session(req.agent_id, req.user_id, session_id, chat_id)
+            await db.save_session(agent_id, user_id, session_id, chat_id)
 
-        answer_resp = await rf.ask(chat_id, session_id, req.query, stream=False)
+        answer_resp = await rf.ask(chat_id, session_id, query, stream=False)
     except RAGFlowError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -364,9 +371,14 @@ async def chat(req: ChatRequest):
     answer_text = data.get("answer", "") if isinstance(data, dict) else ""
     reference = data.get("reference") if isinstance(data, dict) else None
 
-    await db.add_message(req.agent_id, req.user_id, "user", req.query)
-    await db.add_message(req.agent_id, req.user_id, "assistant", answer_text, reference)
+    await db.add_message(agent_id, user_id, "user", query)
+    await db.add_message(agent_id, user_id, "assistant", answer_text, reference)
+    return session_id, answer_text, answer_resp
 
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest):
+    session_id, answer_text, answer_resp = await _run_chat(req.agent_id, req.user_id, req.query)
     return ChatResponse(
         agent_id=req.agent_id, session_id=session_id, answer=answer_text, raw=answer_resp
     )
