@@ -11,7 +11,6 @@ Ishga tushirish:
 Swagger UI:
     http://localhost:8100/docs
 """
-import hmac
 import json
 import os
 import shutil
@@ -19,24 +18,12 @@ import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Optional
-
-from fastapi import (
-    BackgroundTasks,
-    FastAPI,
-    File,
-    Form,
-    HTTPException,
-    Query,
-    Request,
-    UploadFile,
-)
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 
 import db
-import instagram as ig
 import ragflow_client as rf
-from config import get_settings
+from instagram_multi import router as instagram_router, start_token_refresher
 from ragflow_client import RAGFlowError
 from schemas import (
     ChatRequest,
@@ -51,14 +38,16 @@ from schemas import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
+    # Instagram tokenlarini kunlik yangilash (lifespan ishlatilgani uchun
+    # @app.on_event("startup") bu yerda ishlamaydi — shu sababli shu yerda)
+    start_token_refresher()
     yield
     await db.disconnect()
     await rf.close_client()
-    await ig.close_client()
 
 
-settings = get_settings()
 app = FastAPI(title="RAGFlow Wrapper API", version="4.0.0", lifespan=lifespan)
+app.include_router(instagram_router)
 
 
 def _empty_dataset_error() -> HTTPException:
@@ -393,64 +382,6 @@ async def chat(req: ChatRequest):
     return ChatResponse(
         agent_id=req.agent_id, session_id=session_id, answer=answer_text, raw=answer_resp
     )
-
-
-# ---------------------------------------------------------------------
-# INSTAGRAM (Meta webhook)
-# ---------------------------------------------------------------------
-
-@app.get("/instagram/webhook", tags=["instagram"])
-async def verify(
-    hub_mode: Optional[str] = Query(None, alias="hub.mode"),
-    hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
-    hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
-):
-    """Meta webhook tasdiqlash: verify_token mos kelsa hub.challenge'ni qaytaradi."""
-    if (
-        hub_mode == "subscribe"
-        and settings.ig_verify_token
-        and hub_verify_token
-        and hmac.compare_digest(hub_verify_token, settings.ig_verify_token)
-    ):
-        return PlainTextResponse(hub_challenge or "")
-    raise HTTPException(status_code=403, detail="Verify token noto'g'ri")
-
-
-async def _answer_instagram(sender_id: str, text: str) -> None:
-    """Fonda: xabarni agentga beradi va javobni Instagram'ga yuboradi."""
-    try:
-        _, answer, _ = await _run_chat(settings.rag_agent_id, f"ig_{sender_id}", text)
-        answer = ig.clean_answer(answer)
-        if answer:
-            await ig.send_text(sender_id, answer)
-    except HTTPException as e:
-        ig.log.error("Instagram javob xatosi (sender=%s): %s", sender_id, e.detail)
-    except Exception:
-        ig.log.exception("Instagram javob xatosi (sender=%s)", sender_id)
-
-
-@app.post("/instagram/webhook", tags=["instagram"])
-async def receive(request: Request, background_tasks: BackgroundTasks):
-    """Meta'dan kelgan Instagram xabarlarini qabul qiladi; javob fonda yuboriladi."""
-    raw = await request.body()
-    if not ig.verify_signature(raw, request.headers.get("x-hub-signature-256")):
-        raise HTTPException(status_code=403, detail="Imzo (X-Hub-Signature-256) noto'g'ri")
-    try:
-        payload = json.loads(raw or b"{}")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="JSON noto'g'ri")
-
-    if not settings.rag_agent_id:
-        ig.log.error("RAG_AGENT_ID sozlanmagan — Instagram xabarlari javobsiz qoladi")
-        return {"status": "ignored"}
-
-    queued = 0
-    for m in ig.extract_text_messages(payload):
-        if ig.is_duplicate(m["mid"]):
-            continue
-        background_tasks.add_task(_answer_instagram, m["sender_id"], m["text"])
-        queued += 1
-    return {"status": "ok", "queued": queued}
 
 
 @app.post("/agents/{agent_id}/users/{user_id}/reset-session")
